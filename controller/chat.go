@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/samber/lo"
 	"io"
 	"net/http"
 	"strconv"
@@ -284,7 +285,10 @@ loop:
 	}
 
 	replyChan := make(chan model.OpenAIChatCompletionResponse)
-	discord.RepliesOpenAIChans[sentMsg.ID] = replyChan
+	discord.RepliesOpenAIChans[sentMsg.ID] = &model.OpenAIChatCompletionChan{
+		Model:    request.Model,
+		Response: replyChan,
+	}
 	defer delete(discord.RepliesOpenAIChans, sentMsg.ID)
 
 	stopChan := make(chan model.ChannelStopChan)
@@ -376,6 +380,49 @@ loop:
 			}
 		}
 	}
+}
+
+// OpenaiModels 模型列表-openai
+// @Summary 模型列表-openai
+// @Description 模型列表-openai
+// @Tags openai
+// @Accept json
+// @Produce json
+// @Param Authorization header string false "Authorization"
+// @Success 200 {object} model.OpenaiModelListResponse "Successful response"
+// @Router /v1/models [get]
+func OpenaiModels(c *gin.Context) {
+	var modelsResp []string
+
+	secret := ""
+	if len(discord.BotConfigList) != 0 {
+		if secret = c.Request.Header.Get("Authorization"); secret != "" {
+			secret = strings.Replace(secret, "Bearer ", "", 1)
+		}
+
+		botConfigs := discord.FilterConfigs(discord.BotConfigList, secret, "", nil)
+		for _, botConfig := range botConfigs {
+			modelsResp = append(modelsResp, botConfig.Model...)
+		}
+
+		modelsResp = lo.Uniq(modelsResp)
+	} else {
+		modelsResp = common.DefaultOpenaiModelList
+	}
+
+	var openaiModelListResponse model.OpenaiModelListResponse
+	var openaiModelResponse []model.OpenaiModelResponse
+	openaiModelListResponse.Object = "list"
+
+	for _, modelResp := range modelsResp {
+		openaiModelResponse = append(openaiModelResponse, model.OpenaiModelResponse{
+			ID:     modelResp,
+			Object: "model",
+		})
+	}
+	openaiModelListResponse.Data = openaiModelResponse
+	c.JSON(http.StatusOK, openaiModelListResponse)
+	return
 }
 
 func buildOpenAIGPT4VForImageContent(sendChannelId string, objs []interface{}) (string, error) {
@@ -533,18 +580,20 @@ func ImagesForOpenAI(c *gin.Context) {
 			}
 			if request.ResponseFormat == "b64_json" && reply.Data != nil && len(reply.Data) > 0 {
 				for _, data := range reply.Data {
-					base64Str, err := getBase64ByUrl(data.URL)
-					if err != nil {
-						c.JSON(http.StatusInternalServerError, model.OpenAIErrorResponse{
-							OpenAIError: model.OpenAIError{
-								Message: err.Error(),
-								Type:    "request_error",
-								Code:    "500",
-							},
-						})
-						return
+					if data.URL != "" {
+						base64Str, err := getBase64ByUrl(data.URL)
+						if err != nil {
+							c.JSON(http.StatusInternalServerError, model.OpenAIErrorResponse{
+								OpenAIError: model.OpenAIError{
+									Message: err.Error(),
+									Type:    "request_error",
+									Code:    "500",
+								},
+							})
+							return
+						}
+						data.B64Json = "data:image/webp;base64," + base64Str
 					}
-					data.B64Json = "data:image/webp;base64," + base64Str
 				}
 			}
 			replyResp = reply
@@ -689,11 +738,12 @@ func checkUserAuths(c *gin.Context) error {
 	if len(discord.UserAuthorizations) == 0 {
 		common.LogError(c, fmt.Sprintf("无可用的 user_auth"))
 		// tg发送通知
-		if telegram.NotifyTelegramBotToken != "" && telegram.TgBot != nil {
+		if !common.IsSameDay(discord.NoAvailableUserAuthPreNotifyTime, time.Now()) && telegram.NotifyTelegramBotToken != "" && telegram.TgBot != nil {
 			go func() {
 				discord.NoAvailableUserAuthChan <- "stop"
 			}()
 		}
+
 		return fmt.Errorf("no_available_user_auth")
 	}
 	return nil

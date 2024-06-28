@@ -44,10 +44,13 @@ var UserAuthorizations = strings.Split(UserAuthorization, ",")
 var NoAvailableUserAuthChan = make(chan string)
 var CreateChannelRiskChan = make(chan string)
 
+var NoAvailableUserAuthPreNotifyTime time.Time
+var CreateChannelRiskPreNotifyTime time.Time
+
 var BotConfigList []model.BotConfig
 
 var RepliesChans = make(map[string]chan model.ReplyResp)
-var RepliesOpenAIChans = make(map[string]chan model.OpenAIChatCompletionResponse)
+var RepliesOpenAIChans = make(map[string]*model.OpenAIChatCompletionChan)
 var RepliesOpenAIImageChans = make(map[string]chan model.OpenAIImagesGenerationResponse)
 
 var ReplyStopChans = make(map[string]chan model.ChannelStopChan)
@@ -114,6 +117,7 @@ func StartBot(ctx context.Context, token string) {
 }
 
 func telegramNotifyMsgTask() {
+
 	for NoAvailableUserAuthChan != nil || CreateChannelRiskChan != nil {
 		select {
 		case msg, ok := <-NoAvailableUserAuthChan:
@@ -123,7 +127,8 @@ func telegramNotifyMsgTask() {
 				if err != nil {
 					common.LogWarn(nil, fmt.Sprintf("Telegram 推送消息异常 error:%s", err.Error()))
 				} else {
-					NoAvailableUserAuthChan = nil // 停止监听ch1
+					//NoAvailableUserAuthChan = nil // 停止监听ch1
+					NoAvailableUserAuthPreNotifyTime = time.Now()
 				}
 			} else if !ok {
 				NoAvailableUserAuthChan = nil // 如果ch1已关闭，停止监听
@@ -135,7 +140,8 @@ func telegramNotifyMsgTask() {
 				if err != nil {
 					common.LogWarn(nil, fmt.Sprintf("Telegram 推送消息异常 error:%s", err.Error()))
 				} else {
-					CreateChannelRiskChan = nil
+					//CreateChannelRiskChan = nil
+					CreateChannelRiskPreNotifyTime = time.Now()
 				}
 			} else if !ok {
 				CreateChannelRiskChan = nil
@@ -184,6 +190,8 @@ func checkEnvVariable() {
 	}
 	if DefaultChannelEnable == "1" && ChannelId == "" {
 		common.FatalLog("环境变量 CHANNEL_ID 未设置")
+	} else if DefaultChannelEnable == "0" || DefaultChannelEnable == "" {
+		ChannelId = ""
 	}
 	if CozeBotId == "" {
 		common.FatalLog("环境变量 COZE_BOT_ID 未设置")
@@ -294,7 +302,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		replyOpenAIChan, exists := RepliesOpenAIChans[m.ReferencedMessage.ID]
 		if exists {
 			reply := processMessageCreateForOpenAI(m)
-			replyOpenAIChan <- reply
+			reply.Model = replyOpenAIChan.Model
+			replyOpenAIChan.Response <- reply
 		} else {
 			replyOpenAIImageChan, exists := RepliesOpenAIImageChans[m.ReferencedMessage.ID]
 			if exists {
@@ -325,7 +334,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			stopStr := "stop"
 			reply.Choices[0].FinishReason = &stopStr
 			reply.Suggestions = suggestions
-			replyOpenAIChan <- reply
+			reply.Model = replyOpenAIChan.Model
+			replyOpenAIChan.Response <- reply
 		}
 
 		replyOpenAIImageChan, exists := RepliesOpenAIImageChans[m.ReferencedMessage.ID]
@@ -376,7 +386,8 @@ func messageUpdate(s *discordgo.Session, m *discordgo.MessageUpdate) {
 		replyOpenAIChan, exists := RepliesOpenAIChans[m.ReferencedMessage.ID]
 		if exists {
 			reply := processMessageUpdateForOpenAI(m)
-			replyOpenAIChan <- reply
+			reply.Model = replyOpenAIChan.Model
+			replyOpenAIChan.Response <- reply
 		} else {
 			replyOpenAIImageChan, exists := RepliesOpenAIImageChans[m.ReferencedMessage.ID]
 			if exists {
@@ -407,7 +418,8 @@ func messageUpdate(s *discordgo.Session, m *discordgo.MessageUpdate) {
 			stopStr := "stop"
 			reply.Choices[0].FinishReason = &stopStr
 			reply.Suggestions = suggestions
-			replyOpenAIChan <- reply
+			reply.Model = replyOpenAIChan.Model
+			replyOpenAIChan.Response <- reply
 		}
 
 		replyOpenAIImageChan, exists := RepliesOpenAIImageChans[m.ReferencedMessage.ID]
@@ -457,7 +469,7 @@ func SendMessage(c *gin.Context, channelID, cozeBotId, message string) (*discord
 		common.LogError(ctx, fmt.Sprintf("无可用的 user_auth"))
 
 		// tg发送通知
-		if telegram.NotifyTelegramBotToken != "" && telegram.TgBot != nil {
+		if !common.IsSameDay(NoAvailableUserAuthPreNotifyTime, time.Now()) && telegram.NotifyTelegramBotToken != "" && telegram.TgBot != nil {
 			go func() {
 				NoAvailableUserAuthChan <- "stop"
 			}()
@@ -488,7 +500,7 @@ func SendMessage(c *gin.Context, channelID, cozeBotId, message string) (*discord
 			return nil, "", fmt.Errorf("error sending message")
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 
 		if i == len(common.ReverseSegment(content, 1990))-1 {
 			return &discordgo.Message{
