@@ -6,20 +6,23 @@
 
 # coze-discord-proxy
 
+<a href="https://trendshift.io/repositories/7350" target="_blank"><img src="https://trendshift.io/api/badge/repositories/7350" alt="deanxv%2Fcoze-discord-proxy | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
 _代理`Discord`对话`Coze-Bot`，实现以API形式请求GPT4模型，提供对话、文生图、图生文、知识库检索等功能_
 
 _觉得有点意思的话 别忘了点个🌟_
 
 📄<a href="https://cdp-docs.pages.dev" style="font-size: 15px;">CDP项目文档站</a>(必看教程)
 
-🐞<a href="https://t.me/+LGKwlC_xa-E5ZDk9" style="font-size: 15px;">CDP项目-交流群</a>(交流)
+🐞<a href="https://t.me/+raL5ppEzDIFmZTY1" style="font-size: 15px;">CDP项目-交流群</a>(交流)
+<br><sup><i>(群内提供公益API、AI机器人)</i></sup>
 
 📢<a href="https://t.me/+0fYkYY_zUZYzNzRl" style="font-size: 15px;">CDP项目-通知频道</a>(通知)
 
 
 </div>
 
-## 功能
+## 功能(目前项目功能已趋于稳定，迭代不会很频繁，有bug可以提issue哦！)
 
 - [x] 完美适配`NextChat`,`one-api`,`LobeChat`等对话面板。
 - [x] 完美支持对话隔离。
@@ -240,14 +243,9 @@ Render 可以直接部署 docker 镜像,不需要 fork 仓库：[Render](https:/
 
 ## 限制
 
-目前的coze对每个discord用户做了标识,在discord中每个用户对不同的模型的调用有次数限制,具体如下:
+目前的coze的免费及收费订阅详情:https://www.coze.com/docs/guides/subscription?_lang=zh
 
-```
-GPT-4 Turbo (128k) - 50次/天
-GPT-4 (8k) - 100次/天
-GPT-3.5 (16k) - 500次/天
-```
-可配置多discord用户`Authorization`(参考[环境变量](#环境变量)`USER_AUTHORIZATION`)实现叠加请求次数及请求负载均衡。
+可配置多discord用户`Authorization`(参考[环境变量](#环境变量)`USER_AUTHORIZATION`)或[配置多机器人](#配置多机器人)实现叠加请求次数及请求负载均衡。
 
 ## Q&A
 
@@ -259,17 +257,20 @@ A: 首先为服务[配置多机器人](#配置多机器人)用来作响应bot的
 
 [![Star History Chart](https://api.star-history.com/svg?repos=deanxv/coze-discord-proxy&type=Date)](https://star-history.com/#deanxv/coze-discord-proxy&Date)
 
-## 其他版本
+## 相关
 
-**开源不易,若你参考此项目或基于此项目二开可否麻烦在你的项目文档中标识此项目呢？谢谢你！♥♥♥**
+[GPT-Content-Audit](https://github.com/deanxv/gpt-content-audit):聚合Openai、阿里云、百度智能云、七牛云等开放平台，提供与`openai`请求格式对齐的内容审核前置服务。
+
+## 其他
+
+**开源不易,若你参考此项目或基于此项目二开可否麻烦在你的项目文档中标识此项目呢？谢谢你！**
 
 Java: https://github.com/oddfar/coze-discord (目前不可用)
 
-## 其他引用
+## 引用
 
 Coze 官网 : https://www.coze.com
 
 Discord 开发地址 : https://discord.com/developers/applications
-
 
 

@@ -34,6 +34,7 @@ var CozeBotId = os.Getenv("COZE_BOT_ID")
 var GuildId = os.Getenv("GUILD_ID")
 var ChannelId = os.Getenv("CHANNEL_ID")
 var DefaultChannelEnable = os.Getenv("DEFAULT_CHANNEL_ENABLE")
+var MessageMaxToken = os.Getenv("MESSAGE_MAX_TOKEN")
 var ProxyUrl = os.Getenv("PROXY_URL")
 var ChannelAutoDelTime = os.Getenv("CHANNEL_AUTO_DEL_TIME")
 var CozeBotStayActiveEnable = os.Getenv("COZE_BOT_STAY_ACTIVE_ENABLE")
@@ -44,10 +45,14 @@ var UserAuthorizations = strings.Split(UserAuthorization, ",")
 var NoAvailableUserAuthChan = make(chan string)
 var CreateChannelRiskChan = make(chan string)
 
-var BotConfigList []model.BotConfig
+var NoAvailableUserAuthPreNotifyTime time.Time
+var CreateChannelRiskPreNotifyTime time.Time
+
+var BotConfigList []*model.BotConfig
+var BotConfigExist bool
 
 var RepliesChans = make(map[string]chan model.ReplyResp)
-var RepliesOpenAIChans = make(map[string]chan model.OpenAIChatCompletionResponse)
+var RepliesOpenAIChans = make(map[string]*model.OpenAIChatCompletionChan)
 var RepliesOpenAIImageChans = make(map[string]chan model.OpenAIImagesGenerationResponse)
 
 var ReplyStopChans = make(map[string]chan model.ChannelStopChan)
@@ -87,11 +92,13 @@ func StartBot(ctx context.Context, token string) {
 	checkEnvVariable()
 	common.SysLog("Bot is now running. Enjoy It.")
 
-	// 每日9点 重新加载userAuth
+	// 每日9点 重新加载BotConfig
+	go loadBotConfigTask()
+	// 每日9.5点 重新加载userAuth
 	go loadUserAuthTask()
 
 	if CozeBotStayActiveEnable == "1" || CozeBotStayActiveEnable == "" {
-		// 开启coze保活任务
+		// 开启coze保活任务 每日9.10
 		go stayActiveMessageTask()
 	}
 
@@ -113,7 +120,34 @@ func StartBot(ctx context.Context, token string) {
 	<-sc
 }
 
+func loadBotConfigTask() {
+	for {
+		source := rand.NewSource(time.Now().UnixNano())
+		randomNumber := rand.New(source).Intn(60) // 生成0到60之间的随机整数
+
+		// 计算距离下一个时间间隔
+		now := time.Now()
+		next := time.Date(now.Year(), now.Month(), now.Day(), 9, 5, 0, 0, now.Location())
+
+		// 如果当前时间已经超过9点，那么等待到第二天的9点
+		if now.After(next) {
+			next = next.Add(24 * time.Hour)
+		}
+
+		delay := next.Sub(now)
+
+		// 等待直到下一个间隔
+		time.Sleep(delay + time.Duration(randomNumber)*time.Second)
+
+		common.SysLog("CDP Scheduled loadBotConfig Task Job Start!")
+		loadBotConfig()
+		common.SysLog("CDP Scheduled loadBotConfig Task Job  End!")
+
+	}
+}
+
 func telegramNotifyMsgTask() {
+
 	for NoAvailableUserAuthChan != nil || CreateChannelRiskChan != nil {
 		select {
 		case msg, ok := <-NoAvailableUserAuthChan:
@@ -123,7 +157,8 @@ func telegramNotifyMsgTask() {
 				if err != nil {
 					common.LogWarn(nil, fmt.Sprintf("Telegram 推送消息异常 error:%s", err.Error()))
 				} else {
-					NoAvailableUserAuthChan = nil // 停止监听ch1
+					//NoAvailableUserAuthChan = nil // 停止监听ch1
+					NoAvailableUserAuthPreNotifyTime = time.Now()
 				}
 			} else if !ok {
 				NoAvailableUserAuthChan = nil // 如果ch1已关闭，停止监听
@@ -135,7 +170,8 @@ func telegramNotifyMsgTask() {
 				if err != nil {
 					common.LogWarn(nil, fmt.Sprintf("Telegram 推送消息异常 error:%s", err.Error()))
 				} else {
-					CreateChannelRiskChan = nil
+					//CreateChannelRiskChan = nil
+					CreateChannelRiskPreNotifyTime = time.Now()
 				}
 			} else if !ok {
 				CreateChannelRiskChan = nil
@@ -152,7 +188,7 @@ func loadUserAuthTask() {
 
 		// 计算距离下一个时间间隔
 		now := time.Now()
-		next := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
+		next := time.Date(now.Year(), now.Month(), now.Day(), 9, 5, 0, 0, now.Location())
 
 		// 如果当前时间已经超过9点，那么等待到第二天的9点
 		if now.After(next) {
@@ -184,6 +220,8 @@ func checkEnvVariable() {
 	}
 	if DefaultChannelEnable == "1" && ChannelId == "" {
 		common.FatalLog("环境变量 CHANNEL_ID 未设置")
+	} else if DefaultChannelEnable == "0" || DefaultChannelEnable == "" {
+		ChannelId = ""
 	}
 	if CozeBotId == "" {
 		common.FatalLog("环境变量 COZE_BOT_ID 未设置")
@@ -201,6 +239,15 @@ func checkEnvVariable() {
 		_, err := strconv.Atoi(ChannelAutoDelTime)
 		if err != nil {
 			common.FatalLog("环境变量 CHANNEL_AUTO_DEL_TIME 设置有误")
+		}
+	}
+
+	if MessageMaxToken == "" {
+		MessageMaxToken = strconv.Itoa(128 * 1000)
+	} else {
+		_, err := strconv.Atoi(MessageMaxToken)
+		if err != nil {
+			common.FatalLog("环境变量 MESSAGE_MAX_TOKEN 设置有误")
 		}
 	}
 
@@ -230,6 +277,7 @@ func loadBotConfig() {
 		if !os.IsNotExist(err) {
 			common.SysError("载入bot_config.json文件异常")
 		}
+		BotConfigExist = false
 		return
 	}
 
@@ -248,15 +296,32 @@ func loadBotConfig() {
 		common.FatalLog("Error parsing JSON:", err)
 	}
 
-	// 校验默认频道
-	if DefaultChannelEnable == "1" {
-		for _, botConfig := range BotConfigList {
-			if botConfig.ChannelId == "" {
-				common.FatalLog("默认频道开关开启时,必须为每个Coze-Bot配置ChannelId")
+	for _, botConfig := range BotConfigList {
+		// 校验默认频道
+		if DefaultChannelEnable == "1" && botConfig.ChannelId == "" {
+			common.FatalLog("默认频道开关开启时,必须为每个Coze-Bot配置ChannelId")
+		}
+		// 校验MaxToken
+		if botConfig.MessageMaxToken != "" {
+			_, err := strconv.Atoi(botConfig.MessageMaxToken)
+			if err != nil {
+				common.FatalLog(fmt.Sprintf("messageMaxToken 必须为数字!"))
 			}
+		} else {
+			botConfig.MessageMaxToken = strconv.Itoa(128 * 1000)
 		}
 	}
-	common.SysLog(fmt.Sprintf("载入配置文件成功 BotConfigs: %+v", BotConfigList))
+
+	BotConfigExist = true
+
+	// 将结构体切片转换为 JSON 字符串
+	jsonData, err := json.MarshalIndent(BotConfigList, "", "  ")
+	if err != nil {
+		common.FatalLog(fmt.Sprintf("Error marshalling BotConfigs: %v", err))
+	}
+
+	// 打印 JSON 字符串
+	common.SysLog(fmt.Sprintf("载入配置文件成功 BotConfigs:\n%s", string(jsonData)))
 }
 
 // messageCreate handles the create messages in Discord.
@@ -294,7 +359,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		replyOpenAIChan, exists := RepliesOpenAIChans[m.ReferencedMessage.ID]
 		if exists {
 			reply := processMessageCreateForOpenAI(m)
-			replyOpenAIChan <- reply
+			reply.Model = replyOpenAIChan.Model
+			replyOpenAIChan.Response <- reply
 		} else {
 			replyOpenAIImageChan, exists := RepliesOpenAIImageChans[m.ReferencedMessage.ID]
 			if exists {
@@ -325,7 +391,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			stopStr := "stop"
 			reply.Choices[0].FinishReason = &stopStr
 			reply.Suggestions = suggestions
-			replyOpenAIChan <- reply
+			reply.Model = replyOpenAIChan.Model
+			replyOpenAIChan.Response <- reply
 		}
 
 		replyOpenAIImageChan, exists := RepliesOpenAIImageChans[m.ReferencedMessage.ID]
@@ -376,7 +443,8 @@ func messageUpdate(s *discordgo.Session, m *discordgo.MessageUpdate) {
 		replyOpenAIChan, exists := RepliesOpenAIChans[m.ReferencedMessage.ID]
 		if exists {
 			reply := processMessageUpdateForOpenAI(m)
-			replyOpenAIChan <- reply
+			reply.Model = replyOpenAIChan.Model
+			replyOpenAIChan.Response <- reply
 		} else {
 			replyOpenAIImageChan, exists := RepliesOpenAIImageChans[m.ReferencedMessage.ID]
 			if exists {
@@ -407,7 +475,8 @@ func messageUpdate(s *discordgo.Session, m *discordgo.MessageUpdate) {
 			stopStr := "stop"
 			reply.Choices[0].FinishReason = &stopStr
 			reply.Suggestions = suggestions
-			replyOpenAIChan <- reply
+			reply.Model = replyOpenAIChan.Model
+			replyOpenAIChan.Response <- reply
 		}
 
 		replyOpenAIImageChan, exists := RepliesOpenAIImageChans[m.ReferencedMessage.ID]
@@ -425,7 +494,7 @@ func messageUpdate(s *discordgo.Session, m *discordgo.MessageUpdate) {
 	return
 }
 
-func SendMessage(c *gin.Context, channelID, cozeBotId, message string) (*discordgo.Message, string, error) {
+func SendMessage(c *gin.Context, channelID, cozeBotId, message, maxToken string) (*discordgo.Message, string, error) {
 	var ctx context.Context
 	if c == nil {
 		ctx = context.Background()
@@ -447,7 +516,13 @@ func SendMessage(c *gin.Context, channelID, cozeBotId, message string) (*discord
 	content = strings.Replace(content, `\u003e`, ">", -1)
 
 	tokens := common.CountTokens(content)
-	if tokens > 128*1000 {
+	maxTokenInt, err := strconv.Atoi(maxToken)
+	if err != nil {
+		common.LogError(ctx, fmt.Sprintf("error sending message: %s", err))
+		return &discordgo.Message{}, "", fmt.Errorf("error sending message")
+	}
+
+	if tokens > maxTokenInt {
 		common.LogError(ctx, fmt.Sprintf("prompt已超过限制,请分段发送 [%v] %s", tokens, content))
 		return nil, "", fmt.Errorf("prompt已超过限制,请分段发送 [%v]", tokens)
 	}
@@ -457,7 +532,7 @@ func SendMessage(c *gin.Context, channelID, cozeBotId, message string) (*discord
 		common.LogError(ctx, fmt.Sprintf("无可用的 user_auth"))
 
 		// tg发送通知
-		if telegram.NotifyTelegramBotToken != "" && telegram.TgBot != nil {
+		if !common.IsSameDay(NoAvailableUserAuthPreNotifyTime, time.Now()) && telegram.NotifyTelegramBotToken != "" && telegram.TgBot != nil {
 			go func() {
 				NoAvailableUserAuthChan <- "stop"
 			}()
@@ -482,13 +557,13 @@ func SendMessage(c *gin.Context, channelID, cozeBotId, message string) (*discord
 			if errors.As(err, &myErr) {
 				// 无效则将此 auth 移除
 				UserAuthorizations = common.FilterSlice(UserAuthorizations, userAuth)
-				return SendMessage(c, channelID, cozeBotId, message)
+				return SendMessage(c, channelID, cozeBotId, message, maxToken)
 			}
 			common.LogError(ctx, fmt.Sprintf("error sending message: %s", err))
 			return nil, "", fmt.Errorf("error sending message")
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 
 		if i == len(common.ReverseSegment(content, 1990))-1 {
 			return &discordgo.Message{
@@ -555,8 +630,8 @@ func stayActiveMessageTask() {
 
 		// 计算距离下一个时间间隔
 		now := time.Now()
-		// 9点05分 为了保证loadUserAuthTask每日任务执行完毕
-		next := time.Date(now.Year(), now.Month(), now.Day(), 9, 5, 0, 0, now.Location())
+		// 9点10分 为了保证loadUserAuthTask每日任务执行完毕
+		next := time.Date(now.Year(), now.Month(), now.Day(), 9, 10, 0, 0, now.Location())
 
 		// 如果当前时间已经超过9点，那么等待到第二天的9点
 		if now.After(next) {
@@ -570,9 +645,10 @@ func stayActiveMessageTask() {
 
 		var taskBotConfigs = BotConfigList
 
-		taskBotConfigs = append(taskBotConfigs, model.BotConfig{
-			ChannelId: ChannelId,
-			CozeBotId: CozeBotId,
+		taskBotConfigs = append(taskBotConfigs, &model.BotConfig{
+			ChannelId:       ChannelId,
+			CozeBotId:       CozeBotId,
+			MessageMaxToken: MessageMaxToken,
 		})
 
 		taskBotConfigs = model.FilterUniqueBotChannel(taskBotConfigs)
@@ -598,7 +674,7 @@ func stayActiveMessageTask() {
 				common.SysError(fmt.Sprintf("ChannelId{%s} BotId{%s} 活跃机器人任务消息发送异常!雪花Id生成失败!", sendChannelId, config.CozeBotId))
 				continue
 			}
-			_, _, err = SendMessage(nil, sendChannelId, config.CozeBotId, fmt.Sprintf("【%v】 %s", nextID, "CDP Scheduled Task Job Send Msg Success!"))
+			_, _, err = SendMessage(nil, sendChannelId, config.CozeBotId, fmt.Sprintf("【%v】 %s", nextID, "CDP Scheduled Task Job Send Msg Success!"), config.MessageMaxToken)
 			if err != nil {
 				common.SysError(fmt.Sprintf("ChannelId{%s} BotId{%s} 活跃机器人任务消息发送异常!", sendChannelId, config.CozeBotId))
 			} else {
@@ -661,8 +737,8 @@ func UploadToDiscordAndGetURL(channelID string, base64Data string) (string, erro
 }
 
 // FilterConfigs 根据proxySecret和channelId过滤BotConfig
-func FilterConfigs(configs []model.BotConfig, secret, gptModel string, channelId *string) []model.BotConfig {
-	var filteredConfigs []model.BotConfig
+func FilterConfigs(configs []*model.BotConfig, secret, gptModel string, channelId *string) []*model.BotConfig {
+	var filteredConfigs []*model.BotConfig
 	for _, config := range configs {
 		matchSecret := secret == "" || config.ProxySecret == secret
 		matchGptModel := gptModel == "" || common.SliceContains(config.Model, gptModel)
@@ -672,4 +748,24 @@ func FilterConfigs(configs []model.BotConfig, secret, gptModel string, channelId
 		}
 	}
 	return filteredConfigs
+}
+
+func DelLimitBot(botId string) {
+	if BotConfigExist {
+		BotConfigList = FilterBotConfigByBotId(BotConfigList, botId)
+	} else {
+		if CozeBotId == botId {
+			CozeBotId = ""
+		}
+	}
+}
+
+func FilterBotConfigByBotId(slice []*model.BotConfig, filter string) []*model.BotConfig {
+	var result []*model.BotConfig
+	for _, value := range slice {
+		if value.CozeBotId != filter {
+			result = append(result, value)
+		}
+	}
+	return result
 }

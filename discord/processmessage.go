@@ -38,6 +38,17 @@ func processMessageUpdateForOpenAI(m *discordgo.MessageUpdate) model.OpenAIChatC
 		}
 	}
 
+	if len(m.Attachments) != 0 {
+		for _, attachment := range m.Attachments {
+			if attachment.ProxyURL != "" && !strings.Contains(m.Content, attachment.ProxyURL) {
+				if m.Content != "" {
+					m.Content += "\n"
+				}
+				m.Content += fmt.Sprintf("%s\n![Image](%s)", attachment.ProxyURL, attachment.ProxyURL)
+			}
+		}
+	}
+
 	promptTokens := common.CountTokens(m.ReferencedMessage.Content)
 	completionTokens := common.CountTokens(m.Content)
 
@@ -45,7 +56,7 @@ func processMessageUpdateForOpenAI(m *discordgo.MessageUpdate) model.OpenAIChatC
 		ID:      m.ID,
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
-		Model:   "gpt-4-turbo",
+		Model:   "Coze-Model",
 		Choices: []model.OpenAIChoice{
 			{
 				Index: 0,
@@ -67,39 +78,61 @@ func processMessageUpdateForOpenAIImage(m *discordgo.MessageUpdate) model.OpenAI
 	var response model.OpenAIImagesGenerationResponse
 
 	if common.SliceContains(common.CozeDailyLimitErrorMessages, m.Content) {
-		return model.OpenAIImagesGenerationResponse{
-			Created:    time.Now().Unix(),
-			Data:       response.Data,
-			DailyLimit: true,
-		}
-	}
-
-	re := regexp.MustCompile(`]\((https?://\S+)\)`)
-	subMatches := re.FindAllStringSubmatch(m.Content, -1)
-
-	if len(subMatches) == 0 && len(m.Embeds) == 0 {
 		response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
 			RevisedPrompt: m.Content,
 		})
+		res := model.OpenAIImagesGenerationResponse{
+			Created: time.Now().Unix(),
+			Data:    response.Data,
+		}
+		return res
+	}
+
+	re := regexp.MustCompile(`\]\((https?://[^\s\)]+)\)`)
+	subMatches := re.FindAllStringSubmatch(m.Content, -1)
+
+	if len(subMatches) == 0 {
+
+		if len(m.Embeds) != 0 {
+			for _, embed := range m.Embeds {
+				if embed.Image != nil && !strings.Contains(m.Content, embed.Image.URL) {
+					//	if m.Content != "" {
+					//		m.Content += "\n"
+					//	}
+					response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
+						URL:           embed.Image.URL,
+						RevisedPrompt: m.Content,
+					})
+				}
+			}
+		}
+
+		if len(m.Attachments) != 0 {
+			for _, attachment := range m.Attachments {
+				if attachment.ProxyURL != "" && !strings.Contains(m.Content, attachment.ProxyURL) {
+					//	if m.Content != "" {
+					//		m.Content += "\n"
+					//	}
+					response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
+						URL:           attachment.ProxyURL,
+						RevisedPrompt: m.Content,
+					})
+				}
+			}
+		}
+
+		if len(m.Message.Components) > 0 && len(m.Embeds) == 0 && len(m.Attachments) == 0 {
+			response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
+				RevisedPrompt: m.Content,
+			})
+		}
 	}
 
 	for _, match := range subMatches {
 		response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
-			URL: match[1],
+			URL:           match[1],
+			RevisedPrompt: m.Content,
 		})
-	}
-
-	if len(m.Embeds) != 0 {
-		for _, embed := range m.Embeds {
-			if embed.Image != nil && !strings.Contains(m.Content, embed.Image.URL) {
-				if m.Content != "" {
-					m.Content += "\n"
-				}
-				response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
-					URL: embed.Image.URL,
-				})
-			}
-		}
 	}
 
 	return model.OpenAIImagesGenerationResponse{
@@ -136,6 +169,17 @@ func processMessageCreateForOpenAI(m *discordgo.MessageCreate) model.OpenAIChatC
 		}
 	}
 
+	if len(m.Attachments) != 0 {
+		for _, attachment := range m.Attachments {
+			if attachment.ProxyURL != "" && !strings.Contains(m.Content, attachment.ProxyURL) {
+				if m.Content != "" {
+					m.Content += "\n"
+				}
+				m.Content += fmt.Sprintf("%s\n![Image](%s)", attachment.ProxyURL, attachment.ProxyURL)
+			}
+		}
+	}
+
 	promptTokens := common.CountTokens(m.ReferencedMessage.Content)
 	completionTokens := common.CountTokens(m.Content)
 
@@ -143,7 +187,7 @@ func processMessageCreateForOpenAI(m *discordgo.MessageCreate) model.OpenAIChatC
 		ID:      m.ID,
 		Object:  "chat.completion",
 		Created: time.Now().Unix(),
-		Model:   "gpt-4-turbo",
+		Model:   "Coze-Model",
 		Choices: []model.OpenAIChoice{
 			{
 				Index: 0,
@@ -165,39 +209,61 @@ func processMessageCreateForOpenAIImage(m *discordgo.MessageCreate) model.OpenAI
 	var response model.OpenAIImagesGenerationResponse
 
 	if common.SliceContains(common.CozeDailyLimitErrorMessages, m.Content) {
-		return model.OpenAIImagesGenerationResponse{
-			Created:    time.Now().Unix(),
-			Data:       response.Data,
-			DailyLimit: true,
-		}
-	}
-
-	re := regexp.MustCompile(`]\((https?://\S+)\)`)
-	subMatches := re.FindAllStringSubmatch(m.Content, -1)
-
-	if len(subMatches) == 0 && len(m.Embeds) == 0 {
 		response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
 			RevisedPrompt: m.Content,
 		})
+		res := model.OpenAIImagesGenerationResponse{
+			Created: time.Now().Unix(),
+			Data:    response.Data,
+		}
+		return res
 	}
 
-	for i, match := range subMatches {
-		response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
-			URL: match[i],
-		})
-	}
+	re := regexp.MustCompile(`\]\((https?://[^\s\)]+)\)`)
+	subMatches := re.FindAllStringSubmatch(m.Content, -1)
 
-	if len(m.Embeds) != 0 {
-		for _, embed := range m.Embeds {
-			if embed.Image != nil && !strings.Contains(m.Content, embed.Image.URL) {
-				if m.Content != "" {
-					m.Content += "\n"
+	if len(subMatches) == 0 {
+
+		if len(m.Embeds) != 0 {
+			for _, embed := range m.Embeds {
+				if embed.Image != nil && !strings.Contains(m.Content, embed.Image.URL) {
+					//	if m.Content != "" {
+					//		m.Content += "\n"
+					//	}
+					response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
+						URL:           embed.Image.URL,
+						RevisedPrompt: m.Content,
+					})
 				}
-				response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
-					URL: embed.Image.URL,
-				})
 			}
 		}
+
+		if len(m.Attachments) != 0 {
+			for _, attachment := range m.Attachments {
+				if attachment.ProxyURL != "" && !strings.Contains(m.Content, attachment.ProxyURL) {
+					//	if m.Content != "" {
+					//		m.Content += "\n"
+					//	}
+					response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
+						URL:           attachment.ProxyURL,
+						RevisedPrompt: m.Content,
+					})
+				}
+			}
+		}
+
+		if len(m.Message.Components) > 0 && len(m.Embeds) == 0 && len(m.Attachments) == 0 {
+			response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
+				RevisedPrompt: m.Content,
+			})
+		}
+	}
+
+	for _, match := range subMatches {
+		response.Data = append(response.Data, &model.OpenAIImagesGenerationDataResponse{
+			URL:           match[1],
+			RevisedPrompt: m.Content,
+		})
 	}
 
 	return model.OpenAIImagesGenerationResponse{
